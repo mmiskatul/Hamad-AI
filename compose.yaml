@@ -1,0 +1,23 @@
+services:
+  ai-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: oneai-hub/ai-agent:latest
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ai_agent_uploads:/app/storage/uploads
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  ai_agent_uploads:
