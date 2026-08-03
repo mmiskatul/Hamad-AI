@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Protocol
@@ -7,7 +8,7 @@ import httpx
 
 from app.core.config import Settings, settings
 from app.schemas.ai import GenerateRequest, GenerateResponse, ModelInfo
-from app.schemas.common import TokenUsage
+from app.schemas.common import GeneratedImage, TokenUsage
 
 ProviderId = Literal["gpt", "deepseek", "gemini", "perplexity", "claude", "grok"]
 ProviderKind = Literal["openai", "openai-compatible", "anthropic", "gemini", "perplexity"]
@@ -25,6 +26,7 @@ class ProviderConfig:
     model: str
     min_plan: PlanId
     enabled: bool
+    image_model: str = "gpt-image-2"
 
 
 class ModelUnavailableError(Exception):
@@ -70,10 +72,35 @@ class ConfiguredModelRouter:
         if provider is None or not provider.enabled or not provider.api_key.strip():
             raise ModelUnavailableError(request.model_id)
 
+        response_provider = provider
+        configured_model = provider.model
+        image_request = _is_image_generation_request(request)
         try:
+            if image_request:
+                image_provider = next(
+                    (
+                        item
+                        for item in self.providers
+                        if item.kind == "openai" and item.enabled and item.api_key.strip()
+                    ),
+                    None,
+                )
+                if image_provider is None:
+                    raise ProviderRequestError(
+                        "OpenAI", "Image generation is unavailable because OPENAI_API_KEY is not configured."
+                    )
+                response_provider = image_provider
+                configured_model = image_provider.image_model
+                if self.client is not None:
+                    result = await _request_openai_image(self.client, image_provider, request)
+                else:
+                    timeout = httpx.Timeout(settings.model_router_timeout_seconds)
+                    async with httpx.AsyncClient(timeout=timeout) as client:
+                        result = await _request_openai_image(client, image_provider, request)
             if self.client is not None:
-                result = await self._generate_with_client(self.client, provider, request)
-            else:
+                if not image_request:
+                    result = await self._generate_with_client(self.client, provider, request)
+            elif not image_request:
                 timeout = httpx.Timeout(settings.model_router_timeout_seconds)
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     result = await self._generate_with_client(client, provider, request)
@@ -82,8 +109,8 @@ class ConfiguredModelRouter:
         except (httpx.HTTPError, ValueError) as error:
             raise ProviderRequestError(provider.vendor) from error
 
-        content, usage = result
-        if not content.strip():
+        content, usage, generated_images = result
+        if not content.strip() and not generated_images:
             raise ProviderRequestError(
                 provider.vendor, "The AI provider returned an empty response."
             )
@@ -91,9 +118,10 @@ class ConfiguredModelRouter:
             id=f"resp_{uuid4()}",
             created_at=datetime.now(UTC).isoformat(),
             model_id=provider.id,
-            provider=provider.vendor,
-            configured_model=provider.model,
-            content=content.strip(),
+            provider=response_provider.vendor,
+            configured_model=configured_model,
+            content=content.strip() or "Here is your generated image.",
+            generated_images=generated_images,
             usage=usage,
         )
 
@@ -102,7 +130,7 @@ class ConfiguredModelRouter:
         client: httpx.AsyncClient,
         provider: ProviderConfig,
         request: GenerateRequest,
-    ) -> tuple[str, TokenUsage | None]:
+    ) -> tuple[str, TokenUsage | None, list[GeneratedImage]]:
         if provider.kind == "openai":
             return await _request_openai(client, provider, request)
         if provider.kind == "anthropic":
@@ -144,21 +172,67 @@ def _auth_headers(provider: ProviderConfig) -> dict[str, str]:
     return {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
 
 
+def _is_image_generation_request(request: GenerateRequest) -> bool:
+    latest = next(
+        (message.content.lower() for message in reversed(request.messages) if message.role == "user"),
+        "",
+    )
+    action = re.search(r"\b(generate|create|make|draw|paint|render|design|produce)\b", latest)
+    subject = re.search(r"\b(image|images|picture|pictures|photo|photos|illustration|artwork)\b", latest)
+    arabic = re.search(r"(ارسم|أنشئ|انشئ|ولّد|ولد|توليد).{0,30}(صورة|صور|رسمة)", latest)
+    return bool((action and subject) or arabic)
+
+
+async def _request_openai_image(
+    client: httpx.AsyncClient,
+    provider: ProviderConfig,
+    request: GenerateRequest,
+) -> tuple[str, TokenUsage | None, list[GeneratedImage]]:
+    prompt = next(
+        (message.content for message in reversed(request.messages) if message.role == "user"),
+        "",
+    )
+    response = await client.post(
+        f"{provider.base_url.rstrip('/')}/images/generations",
+        headers=_auth_headers(provider),
+        json={
+            "model": provider.image_model,
+            "prompt": prompt,
+            "quality": "low",
+            "size": "1024x1024",
+            "output_format": "png",
+        },
+    )
+    body = _response_json(response, provider.vendor)
+    images = [
+        GeneratedImage(mime_type="image/png", data_base64=item["b64_json"])
+        for item in body.get("data", [])
+        if item.get("b64_json")
+    ]
+    return "Here is your generated image.", _token_usage(body.get("usage")), images
+
+
 async def _request_openai(
     client: httpx.AsyncClient,
     provider: ProviderConfig,
     request: GenerateRequest,
-) -> tuple[str, TokenUsage | None]:
+) -> tuple[str, TokenUsage | None, list[GeneratedImage]]:
     response = await client.post(
         f"{provider.base_url.rstrip('/')}/responses",
         headers=_auth_headers(provider),
         json={
             "model": provider.model,
-            "instructions": _system_instruction(request),
+            "instructions": (
+                f"{_system_instruction(request)}\n"
+                "When the user asks to create, generate, or edit an image, use the "
+                "image_generation tool and return the generated image instead of only "
+                "describing a prompt for another tool."
+            ),
             "input": [
                 message.model_dump() for message in request.messages if message.role != "system"
             ],
             "text": {"verbosity": "medium"},
+            "tools": [{"type": "image_generation"}],
         },
     )
     body = _response_json(response, provider.vendor)
@@ -169,14 +243,19 @@ async def _request_openai(
         for part in item.get("content", [])
         if part.get("type") == "output_text"
     )
-    return content, _token_usage(body.get("usage"))
+    images = [
+        GeneratedImage(mime_type="image/png", data_base64=item["result"])
+        for item in body.get("output", [])
+        if item.get("type") == "image_generation_call" and item.get("result")
+    ]
+    return content, _token_usage(body.get("usage")), images
 
 
 async def _request_openai_compatible(
     client: httpx.AsyncClient,
     provider: ProviderConfig,
     request: GenerateRequest,
-) -> tuple[str, TokenUsage | None]:
+) -> tuple[str, TokenUsage | None, list[GeneratedImage]]:
     messages = [{"role": "system", "content": _system_instruction(request)}]
     messages.extend(message.model_dump() for message in request.messages)
     response = await client.post(
@@ -187,14 +266,14 @@ async def _request_openai_compatible(
     body = _response_json(response, provider.vendor)
     choices = body.get("choices", [])
     content = choices[0].get("message", {}).get("content", "") if choices else ""
-    return content, _token_usage(body.get("usage"), chat_completions=True)
+    return content, _token_usage(body.get("usage"), chat_completions=True), []
 
 
 async def _request_perplexity(
     client: httpx.AsyncClient,
     provider: ProviderConfig,
     request: GenerateRequest,
-) -> tuple[str, TokenUsage | None]:
+) -> tuple[str, TokenUsage | None, list[GeneratedImage]]:
     messages = [{"role": "system", "content": _system_instruction(request)}]
     messages.extend(message.model_dump() for message in request.messages)
     response = await client.post(
@@ -205,14 +284,14 @@ async def _request_perplexity(
     body = _response_json(response, provider.vendor)
     choices = body.get("choices", [])
     content = choices[0].get("message", {}).get("content", "") if choices else ""
-    return content, _token_usage(body.get("usage"), chat_completions=True)
+    return content, _token_usage(body.get("usage"), chat_completions=True), []
 
 
 async def _request_anthropic(
     client: httpx.AsyncClient,
     provider: ProviderConfig,
     request: GenerateRequest,
-) -> tuple[str, TokenUsage | None]:
+) -> tuple[str, TokenUsage | None, list[GeneratedImage]]:
     response = await client.post(
         f"{provider.base_url.rstrip('/')}/messages",
         headers={
@@ -241,15 +320,15 @@ async def _request_anthropic(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
-        )
-    return content, None
+        ), []
+    return content, None, []
 
 
 async def _request_gemini(
     client: httpx.AsyncClient,
     provider: ProviderConfig,
     request: GenerateRequest,
-) -> tuple[str, TokenUsage | None]:
+) -> tuple[str, TokenUsage | None, list[GeneratedImage]]:
     response = await client.post(
         f"{provider.base_url.rstrip('/')}/models/{provider.model}:generateContent",
         params={"key": provider.api_key},
@@ -275,8 +354,8 @@ async def _request_gemini(
             input_tokens=int(metadata.get("promptTokenCount", 0)),
             output_tokens=int(metadata.get("candidatesTokenCount", 0)),
             total_tokens=int(metadata.get("totalTokenCount", 0)),
-        )
-    return content, None
+        ), []
+    return content, None, []
 
 
 def _response_json(response: httpx.Response, provider: str) -> dict:
@@ -323,6 +402,7 @@ def create_model_router(config: Settings | None = None) -> ConfiguredModelRouter
                 configured.openai_model,
                 "free",
                 bool(configured.openai_api_key.strip()),
+                configured.openai_image_model,
             ),
             ProviderConfig(
                 "deepseek",

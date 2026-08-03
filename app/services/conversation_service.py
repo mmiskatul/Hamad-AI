@@ -35,6 +35,7 @@ class ConversationService:
                     message=ConversationMessage(role="assistant", content=generated.content)
                 )
             ],
+            generated_images=generated.generated_images,
             usage=generated.usage,
         )
 

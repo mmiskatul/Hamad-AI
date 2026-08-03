@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_minutes: int = 15
     refresh_token_days: int = 30
-    model_router_timeout_seconds: int = 75
+    model_router_timeout_seconds: int = 180
     upload_dir: str = "storage/uploads"
     enable_workers: bool = True
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-5.6-sol"
+    openai_image_model: str = "gpt-image-2"
 
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"

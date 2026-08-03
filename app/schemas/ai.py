@@ -3,7 +3,7 @@ from typing import Literal
 from pydantic import Field
 
 from app.schemas.chat import ChatMessage, ResponseLanguage
-from app.schemas.common import ApiModel, TokenUsage, UserMemory
+from app.schemas.common import ApiModel, GeneratedImage, TokenUsage, UserMemory
 
 
 class ModelInfo(ApiModel):
@@ -34,4 +34,5 @@ class GenerateResponse(ApiModel):
     provider: str
     configured_model: str
     content: str
+    generated_images: list[GeneratedImage] = Field(default_factory=list)
     usage: TokenUsage | None = None

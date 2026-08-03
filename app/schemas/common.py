@@ -29,6 +29,11 @@ class TokenUsage(ApiModel):
     total_tokens: int = 0
 
 
+class GeneratedImage(ApiModel):
+    mime_type: str = "image/png"
+    data_base64: str
+
+
 class TokenPair(ApiModel):
     access_token: str
     refresh_token: str

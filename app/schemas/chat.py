@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from app.schemas.common import ApiModel, TokenUsage, UserMemory
+from app.schemas.common import ApiModel, GeneratedImage, TokenUsage, UserMemory
 
 ChatRole = Literal["system", "user", "assistant"]
 ResponseLanguage = Literal["auto", "en", "ar", "both"]
@@ -47,4 +47,5 @@ class ChatCompletionResponse(ApiModel):
     provider: str
     configured_model: str
     choices: list[ChatCompletionChoice]
+    generated_images: list[GeneratedImage] = Field(default_factory=list)
     usage: TokenUsage | None = None
