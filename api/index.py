@@ -1,12 +1,10 @@
-"""
-Vercel serverless entrypoint.
+"""Vercel entrypoint for the FastAPI application.
 
-Vercel's legacy Python runtime auto-installs ``requirements.txt`` only when the
-function entrypoint lives under an ``api/`` directory. The application itself
-sits in ``app/main.py``; this module is the thin shim Vercel invokes per
-request, re-exporting the existing ``app`` instance so the same FastAPI app
-runs unchanged in both the container (uvicorn) and serverless (Vercel)
-deployments.
+The application remains in ``app/main.py`` so Docker and uvicorn deployments
+continue to use the same module. Vercel's Python builder detects the exported
+FastAPI ``app`` and supplies the ASGI adapter itself.
 """
 
-from app.main import app  # noqa: F401  (Vercel looks for the top-level `app`)
+from app.main import app
+
+__all__ = ["app"]
