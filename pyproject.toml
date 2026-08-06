@@ -8,6 +8,20 @@ version = "0.1.0"
 description = "FastAPI AI backend for chat, voice, RAG, agents, and file processing"
 readme = "README.md"
 requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "uvicorn[standard]>=0.32,<1.0",
+  "pydantic>=2.8,<3.0",
+  "pydantic-settings>=2.4,<3.0",
+  "email-validator>=2.2,<3.0",
+  "httpx>=0.27,<1.0",
+  "python-multipart>=0.0.9,<1.0",
+  "motor>=3.6,<4.0",
+  "python-jose[cryptography]>=3.3,<4.0",
+  "passlib[bcrypt]>=1.7,<2.0",
+  "celery[redis]>=5.4,<6.0",
+  "redis>=5.0,<6.0",
+]
 
 [tool.setuptools]
 package-dir = {"" = "."}
