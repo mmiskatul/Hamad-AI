@@ -10,8 +10,16 @@ from app.core.database import close_motor_client
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    yield
-    await close_motor_client()
+    try:
+        yield
+    finally:
+        # Vercel does not always drive lifespan shutdown cleanly; failures
+        # here must not propagate or the cold-start exit code turns into a
+        # FUNCTION_INVOCATION_FAILED on the next request.
+        try:
+            await close_motor_client()
+        except Exception:  # noqa: BLE001  (best-effort shutdown)
+            pass
 
 
 def create_app() -> FastAPI:

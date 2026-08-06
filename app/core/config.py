@@ -70,7 +70,20 @@ class Settings(BaseSettings):
             self.xai_api_key,
         )
         if not any(key.strip() for key in provider_keys):
-            raise ValueError("At least one AI provider API key is required in production.")
+            # Allow the service to start without provider keys so the catalogue
+            # endpoint can still list models (with available=False) and the
+            # health check can succeed. Provider-keyed requests fail later via
+            # the model router, not at import time — which is critical for
+            # serverless platforms that crash every cold start on a raised
+            # validator.
+            import warnings
+
+            warnings.warn(
+                "No AI provider API keys are configured. Models will be listed "
+                "with available=False until at least one key is set.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         return self
 
 
